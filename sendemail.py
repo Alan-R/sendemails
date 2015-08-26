@@ -63,9 +63,10 @@ KWDELIM = '@@'
 import re, smtplib, os, time
 from datetime import datetime
 from pytz import timezone
+import pytz
 from email.mime.text import MIMEText
 
-def format_and_send_email(text, subject, smtpinfo, keys):
+def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
     '''
     Format and send an email based on the given text, subject and keywords.
     The following keywords have well-known meanings.
@@ -81,6 +82,7 @@ def format_and_send_email(text, subject, smtpinfo, keys):
         This allows for common substitutions for everyone (in smptinfo) as well
         as substitutions on a per-destination-user basis.
     '''
+    subject = subject.strip()
     keywords = keys
     dest = keywords['email']
     name = keywords['name']
@@ -97,10 +99,27 @@ def format_and_send_email(text, subject, smtpinfo, keys):
         if (key not in ('login', 'password', 'plainbody', 'htmlbody')
                 and key not in keywords):
             keywords[key] = smtpinfo[key]
+    if dest.find('@') == -1:
+        raise ValueError('Email address for %s ["%s"] is invalid' %
+                         (name, dest))
+    if dontsend:
+        outtext = substitute_text(text, keywords)
+        outsubject = substitute_text(subject, keywords)
+        try:
+            timezone(keywords['timezone'])
+            #print('    %s OK.' % (toaddr))
+        except pytz.exceptions.UnknownTimeZoneError:
+            print('ERROR: Time Zone for %s [%s] is invalid'
+                  % (toaddr, keywords['timezone']))
+        return
+
     if should_send_now(keywords):
         outtext = substitute_text(text, keywords)
         outsubject = substitute_text(subject, keywords)
         send_an_email(toaddr, outsubject, smtpinfo, outtext)
+
+WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday',
+            'friday', 'saturday', 'sunday')
 
 def should_send_now(keywords):
     '''
@@ -115,9 +134,21 @@ def should_send_now(keywords):
     '''
     if 'sendhour' not in keywords:
         return True
-    hour = datetime.now(timezone(keywords['timezone'])).hour
-    return hour == int(keywords['sendhour'])
-
+    ourtz = timezone(keywords['timezone'])
+    hour = datetime.now(ourtz).hour
+    if hour != int(keywords['sendhour']):
+        return False
+    if 'sendday' not in keywords:
+        return True
+    sendday = keywords['sendday']
+    intday = None
+    for i in range(0, len(WEEKDAYS)):
+        if sendday.lower() == WEEKDAYS[i]:
+            intday = i
+            break
+    if intday is None:
+        raise ValueError("Illegal sendday: %s" % sendday)
+    return intday == datetime.now(ourtz).date().weekday()
 
 def substitute_text(text, keys):
     '''
@@ -203,9 +234,9 @@ def process_csv_file(csvfilename, action, smtpkw):
         keywords = initline.strip().split(',')
         while True:
             csvkw = {}
-            line = csvfile.readline()
+            line = csvfile.readline().strip()
             if line == '':
-                break
+                return
             if line.startswith('#'):
                 continue
             linewords = line.strip().split(',')
@@ -216,7 +247,7 @@ def process_csv_file(csvfilename, action, smtpkw):
                 csvkw[keywords[j]] = linewords[j]
             action(csvkw, smtpkw)
 
-def send_emails_to_csv_people(ourkw, smtpkw):
+def send_emails_to_csv_people(ourkw, smtpkw, dontsend=True):
     '''
     Action function for 'process_csv_file'
     ourkw is the keywords for this particular person
@@ -232,13 +263,30 @@ def send_emails_to_csv_people(ourkw, smtpkw):
     with open(bodyfile, 'r') as plainbody:
         subject = plainbody.readline()
         plaintext = plainbody.read()
-        format_and_send_email(plaintext, subject, smtpkw, ourkw)
+        format_and_send_email(plaintext, subject, smtpkw, ourkw,
+                              dontsend=dontsend)
 
+def test_emails_to_csv_people(ourkw, smtpkw, dontsend=True):
+    '''
+    Test Action function for 'process_csv_file' to validate
+    our CSV file and message.
 
-def maintest():
+    ourkw is the keywords for this particular person
+    smtpkw is the set of (SMTP) keywords that are common to all emails.
+    '''
+    bodyfile = smtpkw['plainbody']
+    with open(bodyfile, 'r') as plainbody:
+        subject = plainbody.readline()
+        plaintext = plainbody.read()
+        format_and_send_email(plaintext, subject, smtpkw, ourkw,
+                              dontsend=dontsend)
+
+def maintest(testonly=False):
     'Main test program'
     smtpkw = get_smtpinfo('smtp.txt')
-    process_csv_file('destinations.csv', send_emails_to_csv_people, smtpkw)
+    sendfunc = (test_emails_to_csv_people if testonly
+                else send_emails_to_csv_people)
+    process_csv_file('destinations.csv', sendfunc, smtpkw)
 
 if __name__ == '__main__':
     maintest()
