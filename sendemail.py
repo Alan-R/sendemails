@@ -36,6 +36,8 @@ We use two different files for our input:
                             to be sent as the email. It can contain keywords
                             to be substituted from the CSV or SMTP information
                             as @@keyword@@.
+                destinationcsv - name of CSV file as noted below
+
                 from      - From address to put in outgoing message header
 
         Sample SMTP information (but don't indent)
@@ -60,10 +62,8 @@ You can have comment lines in this file (starting with #), but they CANNOT
 appear before the first (header) line.
 '''
 KWDELIM = '@@'
-import re, smtplib, os, time
+import re, smtplib, os, time, sys, pytz
 from datetime import datetime
-from pytz import timezone
-import pytz
 from email.mime.text import MIMEText
 
 def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
@@ -106,7 +106,7 @@ def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
         outtext = substitute_text(text, keywords)
         outsubject = substitute_text(subject, keywords)
         try:
-            timezone(keywords['timezone'])
+            pytz.timezone(keywords['timezone'])
             #print('    %s OK.' % (toaddr))
         except pytz.exceptions.UnknownTimeZoneError:
             print('ERROR: Time Zone for %s [%s] is invalid'
@@ -134,7 +134,7 @@ def should_send_now(keywords):
     '''
     if 'sendhour' not in keywords:
         return True
-    ourtz = timezone(keywords['timezone'])
+    ourtz = pytz.timezone(keywords['timezone'])
     hour = datetime.now(ourtz).hour
     if hour != int(keywords['sendhour']):
         return False
@@ -214,13 +214,20 @@ def get_smtpinfo(filename):
     '''
     keywords = {}
     with open(filename, 'r') as smtpfile:
+        count = 0
         while True:
-            line = smtpfile.readline()
+            line = smtpfile.readline().strip()
+            count += 1
             if line == '':
                 break
             if line.startswith('#'):
                 continue
-            name, value = line.strip().split('=', 1)
+            try:
+                name, value = line.split('=', 1)
+            except ValueError:
+                raise ValueError('SMTP line %d "%s" is incorrect'
+                                 % (count, line.strip()))
+
             keywords[name] = value
     return keywords
 
@@ -281,12 +288,24 @@ def test_emails_to_csv_people(ourkw, smtpkw, dontsend=True):
         format_and_send_email(plaintext, subject, smtpkw, ourkw,
                               dontsend=dontsend)
 
-def maintest(testonly=False):
+def maintest(smtpfile, testonly=False):
     'Main test program'
-    smtpkw = get_smtpinfo('smtp.txt')
+    smtpkw = get_smtpinfo(smtpfile)
     sendfunc = (test_emails_to_csv_people if testonly
                 else send_emails_to_csv_people)
-    process_csv_file('destinations.csv', sendfunc, smtpkw)
+    process_csv_file(smtpkw['destinationcsv'], sendfunc, smtpkw)
+    if testonly:
+        print('Email tests on %s=>%s complete. Failures (if any) noted above.'
+              % (smtpfile, smtpkw['destinationcsv']))
 
 if __name__ == '__main__':
-    maintest()
+
+    smtpname = 'smtp.txt'
+    onlyruntests = False
+
+    for arg in sys.argv[1:]:
+        if arg == '--test':
+            onlyruntests = True
+        else:
+            smtpname = arg
+    maintest(smtpname, testonly=onlyruntests)
