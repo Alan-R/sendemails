@@ -66,7 +66,7 @@ import re, smtplib, os, time, sys, pytz
 from datetime import datetime
 from email.mime.text import MIMEText
 
-def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
+def format_and_send_email(text, subject, smtpinfo, keys, flags=None):
     '''
     Format and send an email based on the given text, subject and keywords.
     The following keywords have well-known meanings.
@@ -83,6 +83,8 @@ def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
         as substitutions on a per-destination-user basis.
     '''
     subject = subject.strip()
+    flags = flags or {}
+    dontsend = flags.get('dontsend', False)
     keywords = keys
     dest = keywords['email']
     name = keywords['name']
@@ -111,9 +113,8 @@ def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
         except pytz.exceptions.UnknownTimeZoneError:
             print('ERROR: Time Zone for %s [%s] is invalid'
                   % (toaddr, keywords['timezone']))
-        return
 
-    if should_send_now(keywords):
+    if should_send_now(keywords, flags):
         outtext = substitute_text(text, keywords)
         outsubject = substitute_text(subject, keywords)
         send_an_email(toaddr, outsubject, smtpinfo, outtext)
@@ -121,7 +122,7 @@ def format_and_send_email(text, subject, smtpinfo, keys, dontsend=False):
 WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday',
             'friday', 'saturday', 'sunday')
 
-def should_send_now(keywords):
+def should_send_now(keywords, flags):
     '''
     Return TRUE if we should send this message now...
 
@@ -132,10 +133,17 @@ def should_send_now(keywords):
     If we're not given a 'sendhour', it's always time to send the message ;-).
 
     '''
+    flags = flags or {}
+    debug = flags.get('debug', False)
     if 'sendhour' not in keywords:
         return True
     ourtz = pytz.timezone(keywords['timezone'])
     hour = datetime.now(ourtz).hour
+    if debug:
+        print('In %s, today is %s, hour is %s.'
+              % (keywords['timezone'],
+                 WEEKDAYS[datetime.now(ourtz).date().weekday()].title(),
+                 int(hour)))
     if hour != int(keywords['sendhour']):
         return False
     if 'sendday' not in keywords:
@@ -190,7 +198,7 @@ def send_an_email(toaddr, subject, smtpinfo, msgbody, smtpdebug=False):
         dest = addrmatch.group()
     else:
         dest = toaddr
-    msg = MIMEText(msgbody)
+    msg = MIMEText(msgbody, 'plain', 'utf-8')
     msg['To'] = toaddr
     msg['From'] = smtpinfo['from']
     msg['Subject'] = subject
@@ -213,7 +221,7 @@ def get_smtpinfo(filename):
     This file should be mode 600 or 400.
     '''
     keywords = {}
-    with open(filename, 'r') as smtpfile:
+    with open(filename, mode='r', encoding='utf-8') as smtpfile:
         count = 0
         while True:
             line = smtpfile.readline().strip()
@@ -232,11 +240,11 @@ def get_smtpinfo(filename):
     return keywords
 
 
-def process_csv_file(csvfilename, action, smtpkw):
+def process_csv_file(csvfilename, action, smtpkw, flags=None):
     '''
     Apply the given action to each line of the CSV file we've been given.
     '''
-    with open(csvfilename, 'r') as csvfile:
+    with open(csvfilename, mode='r', encoding='utf-8') as csvfile:
         initline = csvfile.readline()
         keywords = initline.strip().split(',')
         while True:
@@ -252,9 +260,9 @@ def process_csv_file(csvfilename, action, smtpkw):
                                  % (line, len(linewords), len(keywords)))
             for j in range(0, len(keywords)):
                 csvkw[keywords[j]] = linewords[j]
-            action(csvkw, smtpkw)
+            action(csvkw, smtpkw, flags=flags)
 
-def send_emails_to_csv_people(ourkw, smtpkw, dontsend=True):
+def send_emails_to_csv_people(ourkw, smtpkw, flags=None):
     '''
     Action function for 'process_csv_file'
     ourkw is the keywords for this particular person
@@ -265,47 +273,76 @@ def send_emails_to_csv_people(ourkw, smtpkw, dontsend=True):
         fileage = time.time() - os.path.getmtime(bodyfile)
         ageinhours = fileage / (60*60)
         if ageinhours > int(smtpkw['maxagehours']):
-            raise(ValueError("Message in file %s is too old to send out"
-                             % bodyfile))
-    with open(bodyfile, 'r') as plainbody:
+            raise(ValueError("Message in file %s is too old (%s hours) to send."
+                             % (bodyfile, ageinhours)))
+    with open(bodyfile, mode='r', encoding='utf-8') as plainbody:
         subject = plainbody.readline()
         plaintext = plainbody.read()
-        format_and_send_email(plaintext, subject, smtpkw, ourkw,
-                              dontsend=dontsend)
+        format_and_send_email(plaintext, subject, smtpkw, ourkw, flags)
 
-def test_emails_to_csv_people(ourkw, smtpkw, dontsend=True):
+def test_emails_to_csv_people(ourkw, smtpkw, flags):
     '''
     Test Action function for 'process_csv_file' to validate
     our CSV file and message.
 
     ourkw is the keywords for this particular person
     smtpkw is the set of (SMTP) keywords that are common to all emails.
+
+    It might be nice to validate each email address - here's a
+    suggestion on how to do it:
+        https://gist.github.com/blinks/47987
+    based on the technique described here:
+    https://www.webdigi.co.uk/blog/2009/how-to-check-if-an-email-address-exists-without-sending-an-email/
+
+    the Webdigi page mentions that if you do this continually to check
+    for gmail/yahoo/msn accounts this may cause your IP to be added
+    to a blacklist. Not a good thing!
+
+    Not only that I suspect this technique won't work for some of these
+    sites because they likely only reject the email after it's been sent.
+    There are currently 72 gmail addresses in the list. That's a quite a few.
+
+    Tried the technique by hand, could not make it work for any emails...
+    I wonder if my home address is in a block list?
     '''
     bodyfile = smtpkw['plainbody']
-    with open(bodyfile, 'r') as plainbody:
+    with open(bodyfile, mode='r', encoding='utf-8') as plainbody:
         subject = plainbody.readline()
         plaintext = plainbody.read()
-        format_and_send_email(plaintext, subject, smtpkw, ourkw,
-                              dontsend=dontsend)
+        ourflags = flags
+        ourflags['dontsend'] = True
+        format_and_send_email(plaintext, subject, smtpkw, ourkw, ourflags)
 
-def maintest(smtpfile, testonly=False):
+def maintest():
     'Main test program'
-    smtpkw = get_smtpinfo(smtpfile)
-    sendfunc = (test_emails_to_csv_people if testonly
-                else send_emails_to_csv_people)
-    process_csv_file(smtpkw['destinationcsv'], sendfunc, smtpkw)
-    if testonly:
-        print('Email tests on %s=>%s complete. Failures (if any) noted above.'
-              % (smtpfile, smtpkw['destinationcsv']))
-
-if __name__ == '__main__':
-
-    smtpname = 'smtp.txt'
-    onlyruntests = False
+    smtpfile = 'smtp.txt'
+    legalflags = {'debug', 'test'}
+    flags = {}
+    for flag in legalflags:
+        flags[flag] = False
 
     for arg in sys.argv[1:]:
-        if arg == '--test':
-            onlyruntests = True
+        if arg.startswith('--'):
+            flag = arg[2:]
+            if flag not in legalflags:
+                raise ValueError("Illegal flag '%s': legal flags are %s" %
+                                 (flag, str(legalflags)))
+            flags[flag] = True
         else:
-            smtpname = arg
-    maintest(smtpname, testonly=onlyruntests)
+            smtpfile = arg
+    smtpkw = get_smtpinfo(smtpfile)
+    sendfunc = (test_emails_to_csv_people if flags['test']
+                else send_emails_to_csv_people)
+    process_csv_file(smtpkw['destinationcsv'], sendfunc, smtpkw, flags)
+
+    if flags.get('test', False):
+        if 'sendhour' in smtpkw:
+            print('Sending on %s at %02dxx. Today is %s in local time zone.'
+                  % (smtpkw['sendday'], int(smtpkw['sendhour']),
+                     WEEKDAYS[datetime.now().date().weekday()].title()))
+        print('Email tests on %s=>%s=>%s complete.'
+              % (smtpfile, smtpkw['plainbody'], smtpkw['destinationcsv']))
+        print('Failures (if any) noted above.')
+
+if __name__ == '__main__':
+    maintest()
