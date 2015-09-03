@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # vim: smartindent tabstop=4 shiftwidth=4 expandtab number
 #
-# This file is part of the Assimilation Project.
-#
 # Author: Alan Robertson <alanr@unix.sh>
 # Copyright (C) 2015 - Alan Robertson
 #
