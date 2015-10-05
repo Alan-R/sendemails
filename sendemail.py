@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# vim: smartindent tabstop=4 shiftwidth=4 expandtab number
+# vim: smartindent tabstop=4 shiftwidth=4 expandtab number colorcolumn=80
 #
 # Author: Alan Robertson <alanr@unix.sh>
 # Copyright (C) 2015 - Alan Robertson
@@ -22,7 +22,7 @@
 '''
 Module (main program) for sending email to a collection of people
 while performing substitution to make the emails personalized
-and seem homey and human-created.
+and seem a bit more homey and human-created.
 
 We use two different files for our input:
     SMTP information - formatted as name=value
@@ -64,6 +64,9 @@ import re, smtplib, os, time, sys, pytz
 from datetime import datetime
 from email.mime.text import MIMEText
 
+allnames = {}
+allemails = {}
+
 def format_and_send_email(text, subject, smtpinfo, keys, flags=None):
     '''
     Format and send an email based on the given text, subject and keywords.
@@ -86,6 +89,14 @@ def format_and_send_email(text, subject, smtpinfo, keys, flags=None):
     keywords = keys
     dest = keywords['email']
     name = keywords['name']
+    if dest.lower() in allemails:
+        print ('OOPS: Email address %s is duplicate' % dest)
+        return
+    allemails[dest.lower()] = name.lower()
+    if name.lower() in allnames:
+        print ('OOPS: Name %s is duplicate' % name)
+        return
+    allnames[name.lower()] = dest.lower()
     if 'firstname' in keywords:
         firstname = keywords['firstname']
     else:
@@ -102,6 +113,12 @@ def format_and_send_email(text, subject, smtpinfo, keys, flags=None):
     if dest.find('@') == -1:
         raise ValueError('Email address for %s ["%s"] is invalid' %
                          (name, dest))
+    tz = pytz.timezone(keywords['timezone'])
+    keywords['Date'] = datetime.now(tz).strftime('%F %T %z')
+    if 'Today' not in keywords:
+        keywords['Today'] = datetime.now(tz).strftime('%d %B')
+    if 'Year' not in keywords:
+        keywords['Year'] = datetime.now(tz).strftime('%Y')
     if dontsend:
         outtext = substitute_text(text, keywords)
         outsubject = substitute_text(subject, keywords)
@@ -115,7 +132,7 @@ def format_and_send_email(text, subject, smtpinfo, keys, flags=None):
     if should_send_now(keywords, flags):
         outtext = substitute_text(text, keywords)
         outsubject = substitute_text(subject, keywords)
-        send_an_email(toaddr, outsubject, smtpinfo, outtext)
+        send_an_email(toaddr, outsubject, smtpinfo, outtext, keywords)
 
 WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday',
             'friday', 'saturday', 'sunday')
@@ -183,13 +200,20 @@ def find_keywords(text):
 
 DESTPATTERN = re.compile('<(.*)>')
 
-def send_an_email(toaddr, subject, smtpinfo, msgbody, smtpdebug=False):
+def send_an_email(toaddr, subject, smtpinfo, msgbody, keywords, smtpdebug=False):
     '''
     We need this info in the smtpinfo:
         gateway     System providing SMTP service
         login       Login name for 'gateway'
         password    password for 'login'
         from        From address for message header
+
+	Here are some things we'd like to find in smptinfo
+Organization: Assimilation Systems Limited
+Message-ID: <55F32FF9.9000003@unix.sh>
+Date: Fri, 11 Sep 2015 13:48:09 -0600
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:38.0) Gecko/20100101 Thunderbird/38.2.0
+
     '''
     addrmatch = DESTPATTERN.search(toaddr)
     if addrmatch:
@@ -200,6 +224,10 @@ def send_an_email(toaddr, subject, smtpinfo, msgbody, smtpdebug=False):
     msg['To'] = toaddr
     msg['From'] = smtpinfo['from']
     msg['Subject'] = subject
+    for header in ('Organization', 'Message-ID', 'Date', 'User-Agent'
+                   'Importance'):
+        if header in smtpinfo:
+            msg[header] = smtpinfo[header]
 
     print("Sending email to %s." % toaddr)
     server = smtplib.SMTP(smtpinfo['gateway'], 587)
@@ -271,7 +299,7 @@ def send_emails_to_csv_people(ourkw, smtpkw, flags=None):
         fileage = time.time() - os.path.getmtime(bodyfile)
         ageinhours = fileage / (60*60)
         if ageinhours > int(smtpkw['maxagehours']):
-            raise(ValueError("Message in file %s is too old (%s hours) to send."
+            raise(ValueError("Message in file %s is too old (%s hours)."
                              % (bodyfile, ageinhours)))
     with open(bodyfile, mode='r', encoding='utf-8') as plainbody:
         subject = plainbody.readline()
@@ -292,7 +320,7 @@ def test_emails_to_csv_people(ourkw, smtpkw, flags):
     based on the technique described here:
     https://www.webdigi.co.uk/blog/2009/how-to-check-if-an-email-address-exists-without-sending-an-email/
 
-    the Webdigi page mentions that if you do this continually to check
+    The Webdigi page mentions that if you do this continually to check
     for gmail/yahoo/msn accounts this may cause your IP to be added
     to a blacklist. Not a good thing!
 

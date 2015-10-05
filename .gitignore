@@ -1,0 +1,7 @@
+.gitignore.swp
+*.csv
+crontab
+*.txt
+*.txt.bak
+latlong
+latlong/*
