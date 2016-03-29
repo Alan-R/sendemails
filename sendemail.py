@@ -238,7 +238,7 @@ User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:38.0) Gecko/20100101 Thunderbird/
         server.starttls()
         server.ehlo()
         server.login(smtpinfo['login'], smtpinfo['password'])
-        server.sendmail(smtpinfo[from], [toaddr], msg.as_string())
+        server.sendmail(smtpinfo['from'], [toaddr], msg.as_string())
     finally:
         server.quit()
 
